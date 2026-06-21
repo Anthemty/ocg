@@ -80,18 +80,30 @@ func saveConfig(cfg *Config) error {
 
 func formatDuration(sec int) string {
 	d := time.Duration(sec) * time.Second
-	h := int(d.Hours())
+	days := int(d.Hours()) / 24
+	h := int(d.Hours()) % 24
 	m := int(d.Minutes()) % 60
-	if h > 0 {
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %dh", days, h)
+	case h > 0:
 		return fmt.Sprintf("%dh %dm", h, m)
+	default:
+		return fmt.Sprintf("%dm", m)
 	}
-	return fmt.Sprintf("%dm", m)
 }
 
+// bar renders a fixed-width ASCII progress bar. Filled blocks use █, empty use ░.
 func bar(pct, width int) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
 	filled := pct * width / 100
 	b := make([]rune, width)
-	for i := 0; i < width; i++ {
+	for i := range width {
 		if i < filled {
 			b[i] = '█'
 		} else {
@@ -100,3 +112,4 @@ func bar(pct, width int) string {
 	}
 	return string(b)
 }
+

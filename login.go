@@ -1,66 +1,79 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"os"
+	"os/exec"
 	"strings"
 )
 
-func runLogin(args []string) error {
+// dialogInput shows a macOS native input dialog. Returns the entered text and
+// whether the user confirmed (OK) or cancelled.
+func dialogInput(title, prompt, defaultValue string) (string, bool) {
+	title = strings.ReplaceAll(title, `"`, `\"`)
+	prompt = strings.ReplaceAll(prompt, `"`, `\"`)
+	defaultValue = strings.ReplaceAll(defaultValue, `"`, `\"`)
+	script := fmt.Sprintf(
+		`set result to display dialog "%s" with title "%s" default answer "%s"`,
+		prompt, title, defaultValue,
+	)
+	out, err := exec.Command("osascript", "-e", script).Output()
+	if err != nil {
+		return "", false // user cancelled or dismissed
+	}
+	// output: "button returned:OK, text returned:value"
+	for _, part := range strings.Split(strings.TrimSpace(string(out)), ",") {
+		part = strings.TrimSpace(part)
+		if after, ok := strings.CutPrefix(part, "text returned:"); ok {
+			return strings.TrimSpace(after), true
+		}
+	}
+	return "", false
+}
+
+// dialogAlert shows a macOS native alert with a single OK button.
+func dialogAlert(title, message string) {
+	title = strings.ReplaceAll(title, `"`, `\"`)
+	message = strings.ReplaceAll(message, `"`, `\"`)
+	exec.Command("osascript", "-e",
+		fmt.Sprintf(`display dialog "%s" with title "%s" buttons {"OK"} default button "OK"`,
+			message, title)).Run()
+}
+
+// promptSetCookie shows a dialog asking for the auth cookie and saves it.
+func promptSetCookie() bool {
+	val, ok := dialogInput("OCG Usage", "Paste auth cookie value:", "")
+	if !ok || val == "" {
+		return false
+	}
+	if !strings.HasPrefix(val, "auth=") {
+		val = "auth=" + val
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		cfg = &Config{}
+	}
+	cfg.AuthCookie = val
+	if err := saveConfig(cfg); err != nil {
+		dialogAlert("Error", fmt.Sprintf("Failed to save config: %v", err))
+		return false
+	}
+	return true
+}
+
+// promptSetWorkspace shows a dialog asking for the workspace ID and saves it.
+func promptSetWorkspace() bool {
 	cfg, _ := loadConfig()
 	if cfg == nil {
 		cfg = &Config{}
 	}
-
-	ws := cfg.WorkspaceID
-	if ws == "" {
-		ws = defaultWorkspace
+	val, ok := dialogInput("OCG Usage", "Enter workspace ID:", cfg.WorkspaceID)
+	if !ok || val == "" {
+		return false
 	}
-
-	fmt.Println("OpenCode Go Usage — Login")
-	fmt.Println()
-	fmt.Printf("1. Open this URL in your browser:\n   https://opencode.ai/workspace/%s/go\n", ws)
-	fmt.Println()
-	fmt.Println("2. Log in with GitHub or Google if prompted")
-	fmt.Println()
-	fmt.Println("3. Open DevTools (F12) → Application → Cookies → opencode.ai")
-	fmt.Println("   Copy the full 'auth' cookie value")
-	fmt.Println()
-	fmt.Println("4. Paste the cookie value below and press Enter:")
-	fmt.Println()
-
-	reader := bufio.NewReader(os.Stdin)
-	cookie, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("read input: %w", err)
-	}
-	cookie = strings.TrimSpace(cookie)
-	if cookie == "" {
-		return fmt.Errorf("no cookie provided")
-	}
-
-	// Normalize: wrap with "auth=" if just the value (not the full cookie header)
-	if !strings.HasPrefix(cookie, "auth=") {
-		cookie = "auth=" + cookie
-	}
-
-	cfg.AuthCookie = cookie
-
-	fmt.Print("Workspace ID (press Enter for default): ")
-	id, _ := reader.ReadString('\n')
-	id = strings.TrimSpace(id)
-	if id != "" {
-		cfg.WorkspaceID = id
-	} else if cfg.WorkspaceID == "" {
-		cfg.WorkspaceID = defaultWorkspace
-	}
-
+	cfg.WorkspaceID = val
 	if err := saveConfig(cfg); err != nil {
-		return fmt.Errorf("save config: %w", err)
+		dialogAlert("Error", fmt.Sprintf("Failed to save config: %v", err))
+		return false
 	}
-
-	fmt.Println("✓ Cookie saved to ~/.config/ocg/config.json")
-	fmt.Println("  Run 'ocg' to check usage.")
-	return nil
+	return true
 }

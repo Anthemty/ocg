@@ -2,6 +2,10 @@
 ocg
 ocg-*-amd64
 ocg-*-arm64
+OCGTool.app/
+
+# Local tooling
+.reasonix/
 
 # macOS
 .DS_Store

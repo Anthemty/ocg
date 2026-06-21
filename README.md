@@ -1,62 +1,57 @@
-# ocg — OpenCode Go Usage CLI
+# ocg — OpenCode Go Usage (macOS Menu Bar)
 
-Query your [OpenCode Go](https://opencode.ai) plan usage from the terminal. No browser needed after initial setup.
+Menu bar app that monitors your [OpenCode Go](https://opencode.ai) plan usage. Sits in the menu bar and auto-refreshes every 15 minutes.
 
-## Usage
+## Quick Start
 
-```
-ocg         # show usage
-ocg --json  # JSON output
-```
-
-### Rolling / Weekly / Monthly
-
-```
-OpenCode Go Usage
-  Plan: Go
-
-  Rolling:   2% used  (resets in 2h 1m)
-  Rolling ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  2%
-  …
+```bash
+make app       # build → OCGTool.app
+open OCGTool.app
 ```
 
-### JSON
+Or just the binary (shows in Dock too without the .app wrapper):
 
-```json
-{
-  "rolling":   { "percent": 2, "reset_in_sec": 7746,  "status": "ok" },
-  "weekly":    { "percent": 24,"reset_in_sec": 64856, "status": "ok" },
-  "monthly":   { "percent": 63,"reset_in_sec": 558272,"status": "ok" },
-  "plan": "Go",
-  "fetched_at": "2026-06-21T05:59:53Z"
-}
+```bash
+go build -o ocg .
+./ocg
+```
+
+## Menu
+
+```
+[●]                   ← menu bar icon
+  ──────────────
+  Plan: Go            ← usage data (updated every 15 min)
+  ──────────────
+  Rolling: 2% used (resets in 2h)
+  Weekly: 24% used (resets in 18h)
+  Monthly: 63% used (resets in 6d)
+  ──────────────
+  Refresh Now         ← manual refresh
+  Set Cookie...       ← paste auth cookie from browser
+  Set Workspace ID... ← change workspace
+  ──────────────
+  Quit
 ```
 
 ## Setup (one-time)
 
-```
-ocg cookie '<auth-cookie-value>'   # paste auth cookie from browser DevTools
-ocg workspace <id>                 # set workspace ID (default: your workspace)
-```
-
-To get the cookie:
-
-1. Open [opencode.ai/workspace](https://opencode.ai/workspace) and log in
-2. DevTools → Application → Cookies → `opencode.ai` → copy `auth` value
-3. `ocg cookie 'auth=…'`
+1. Open [opencode.ai/workspace](https://opencode.ai/workspace) and log in with GitHub/Google
+2. DevTools → Application → Cookies → `opencode.ai` → copy the `auth` value
+3. Click **Set Cookie...** in the menu bar and paste it (with or without the `auth=` prefix)
 
 The cookie is valid for 1 year.
 
+App config is stored at `~/.config/ocg/config.json`.
+
 ## Build
 
-```
-go build -o ocg .
-```
+Requires Go 1.22+ and Xcode Command Line Tools (for CGO — calls macOS native APIs).
 
-Cross-compile for Linux:
-
-```
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ocg-linux-amd64 .
+```bash
+make        # builds OCGTool.app
+make run    # builds and opens the app
+make build  # plain binary (no .app wrapper)
 ```
 
 ## How it works
