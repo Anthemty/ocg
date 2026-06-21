@@ -30,6 +30,10 @@ var (
 func main() {
 	macos.RunApp(func(app appkit.Application, delegate *appkit.ApplicationDelegate) {
 		app.SetActivationPolicy(appkit.ApplicationActivationPolicyAccessory)
+		// Prevent macOS from auto-terminating this windowless menu-bar app.
+		pi := foundation.ProcessInfo_ProcessInfo()
+		pi.SetAutomaticTerminationSupportEnabled(false)
+		pi.DisableAutomaticTermination("menubar")
 		setupStatusItem(app)
 		go backgroundRefresh()
 	})
