@@ -1,0 +1,10 @@
+# Binaries
+ocg
+ocg-*-amd64
+ocg-*-arm64
+
+# macOS
+.DS_Store
+
+# Config
+config.json
