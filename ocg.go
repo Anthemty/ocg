@@ -8,10 +8,29 @@ import (
 	"time"
 )
 
+// ---------- Config ----------
+
 type Config struct {
+	ActiveProvider string          `json:"active_provider"` // "opencode" | "deepseek" | "minimax"
+	OpenCode       OpenCodeConfig  `json:"opencode"`
+	DeepSeek       DeepSeekConfig  `json:"deepseek"`
+	Minimax        MinimaxConfig   `json:"minimax"`
+}
+
+type OpenCodeConfig struct {
 	WorkspaceID string `json:"workspace_id"`
 	AuthCookie  string `json:"auth_cookie"`
 }
+
+type DeepSeekConfig struct {
+	APIKey string `json:"api_key"`
+}
+
+type MinimaxConfig struct {
+	APIKey string `json:"api_key"`
+}
+
+// ---------- OpenCode types (keep for backward compat during migration) ----------
 
 type UsageData struct {
 	Rolling   Meter  `json:"rolling"`
@@ -26,6 +45,20 @@ type Meter struct {
 	ResetInSec int    `json:"reset_in_sec"`
 	Status     string `json:"status"`
 }
+
+// ---------- Unified fetch result ----------
+
+// ProviderFetchResult holds the data for one provider after a fetch cycle.
+type ProviderFetchResult struct {
+	Criticality int      // 0-100, for icon colour
+	Err         error    // non-nil if fetch failed
+	Lines       []string // formatted display lines
+}
+
+// providerCache holds the latest fetch result per provider.
+var providerCache = make(map[string]*ProviderFetchResult)
+
+// ---------- Config file ----------
 
 func configDir() (string, error) {
 	home, err := os.UserHomeDir()
@@ -55,15 +88,37 @@ func loadConfig() (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &Config{}, nil
+			return &Config{ActiveProvider: "opencode"}, nil
 		}
 		return nil, err
 	}
+	// Try new format first.
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
+	if err := json.Unmarshal(data, &cfg); err == nil {
+		// Detect old-format: top-level fields set.
+		var old legacyConfig
+		if json.Unmarshal(data, &old) == nil && (old.WorkspaceID != "" || old.AuthCookie != "") {
+			cfg.OpenCode.WorkspaceID = old.WorkspaceID
+			cfg.OpenCode.AuthCookie = old.AuthCookie
+			if cfg.ActiveProvider == "" {
+				cfg.ActiveProvider = "opencode"
+			}
+			// Persist migrated format.
+			_ = saveConfig(&cfg)
+		}
+		if cfg.ActiveProvider == "" {
+			cfg.ActiveProvider = "opencode"
+		}
+		return &cfg, nil
 	}
-	return &cfg, nil
+	// If even legacy parse fails, return empty.
+	return &Config{ActiveProvider: "opencode"}, nil
+}
+
+// legacyConfig mirrors the old single-provider format for migration.
+type legacyConfig struct {
+	WorkspaceID string `json:"workspace_id"`
+	AuthCookie  string `json:"auth_cookie"`
 }
 
 func saveConfig(cfg *Config) error {
@@ -71,12 +126,17 @@ func saveConfig(cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	if cfg.ActiveProvider == "" {
+		cfg.ActiveProvider = "opencode"
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0600)
 }
+
+// ---------- Helpers ----------
 
 func formatDuration(sec int) string {
 	d := time.Duration(sec) * time.Second
@@ -93,3 +153,14 @@ func formatDuration(sec int) string {
 	}
 }
 
+// statusDot returns a coloured circle emoji by usage level.
+func statusDot(pct int) string {
+	switch {
+	case pct < 50:
+		return "🟢"
+	case pct < 85:
+		return "🟡"
+	default:
+		return "🔴"
+	}
+}

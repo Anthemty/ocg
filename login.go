@@ -6,8 +6,7 @@ import (
 	"strings"
 )
 
-// dialogInput shows a macOS native input dialog. Returns the entered text and
-// whether the user confirmed (OK) or cancelled.
+// dialogInput shows a macOS native input dialog.
 func dialogInput(title, prompt, defaultValue string) (string, bool) {
 	title = strings.ReplaceAll(title, `"`, `\"`)
 	prompt = strings.ReplaceAll(prompt, `"`, `\"`)
@@ -18,9 +17,8 @@ func dialogInput(title, prompt, defaultValue string) (string, bool) {
 	)
 	out, err := exec.Command("osascript", "-e", script).Output()
 	if err != nil {
-		return "", false // user cancelled or dismissed
+		return "", false
 	}
-	// output: "button returned:OK, text returned:value"
 	for _, part := range strings.Split(strings.TrimSpace(string(out)), ",") {
 		part = strings.TrimSpace(part)
 		if after, ok := strings.CutPrefix(part, "text returned:"); ok {
@@ -30,7 +28,7 @@ func dialogInput(title, prompt, defaultValue string) (string, bool) {
 	return "", false
 }
 
-// dialogAlert shows a macOS native alert with a single OK button.
+// dialogAlert shows a macOS native alert.
 func dialogAlert(title, message string) {
 	title = strings.ReplaceAll(title, `"`, `\"`)
 	message = strings.ReplaceAll(message, `"`, `\"`)
@@ -39,9 +37,10 @@ func dialogAlert(title, message string) {
 			message, title)).Run()
 }
 
-// promptSetCookie shows a dialog asking for the auth cookie and saves it.
-func promptSetCookie() bool {
-	val, ok := dialogInput("OCG Usage", "Paste auth cookie value:", "")
+// ---------- Configure dialogs ----------
+
+func promptSetOpenCodeCookie() bool {
+	val, ok := dialogInput("OpenCode Go", "Paste auth cookie value:", "")
 	if !ok || val == "" {
 		return false
 	}
@@ -50,9 +49,9 @@ func promptSetCookie() bool {
 	}
 	cfg, err := loadConfig()
 	if err != nil {
-		cfg = &Config{}
+		cfg = &Config{ActiveProvider: "opencode"}
 	}
-	cfg.AuthCookie = val
+	cfg.OpenCode.AuthCookie = val
 	if err := saveConfig(cfg); err != nil {
 		dialogAlert("Error", fmt.Sprintf("Failed to save config: %v", err))
 		return false
@@ -60,20 +59,48 @@ func promptSetCookie() bool {
 	return true
 }
 
-// promptSetWorkspace shows a dialog asking for the workspace ID and saves it.
-func promptSetWorkspace() bool {
+func promptSetOpenCodeWorkspace() bool {
 	cfg, _ := loadConfig()
 	if cfg == nil {
-		cfg = &Config{}
+		cfg = &Config{ActiveProvider: "opencode"}
 	}
-	val, ok := dialogInput("OCG Usage", "Enter workspace ID:", cfg.WorkspaceID)
+	val, ok := dialogInput("OpenCode Go", "Enter workspace ID:", cfg.OpenCode.WorkspaceID)
 	if !ok || val == "" {
 		return false
 	}
-	cfg.WorkspaceID = val
+	cfg.OpenCode.WorkspaceID = val
 	if err := saveConfig(cfg); err != nil {
 		dialogAlert("Error", fmt.Sprintf("Failed to save config: %v", err))
 		return false
 	}
 	return true
 }
+
+func promptSetDeepSeekKey() bool {
+	cfg, _ := loadConfig()
+	if cfg == nil {
+		cfg = &Config{ActiveProvider: "deepseek"}
+	}
+	val, ok := dialogInput("DeepSeek", "Paste DeepSeek API key:", cfg.DeepSeek.APIKey)
+	if !ok || val == "" {
+		return false
+	}
+	cfg.DeepSeek.APIKey = val
+	if err := saveConfig(cfg); err != nil {
+		dialogAlert("Error", fmt.Sprintf("Failed to save config: %v", err))
+		return false
+	}
+	return true
+}
+
+// promptConfigureProviders shows instructions and calls per-provider dialogs.
+func promptConfigureProviders() {
+	dialogAlert("Configure Providers",
+		"Choose which provider to configure by clicking its menu item.\n\n"+
+			"OpenCode – set auth cookie + workspace ID\n"+
+			"DeepSeek – set API key\n"+
+			"MiniMax  – set API key")
+	// Individual providers are configured via separate menu items.
+	// This alert guides the user to use Refresh+Configure flow.
+}
+

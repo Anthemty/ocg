@@ -7,15 +7,38 @@ import (
 	"github.com/getlantern/systray"
 )
 
+// Provider names.
+const (
+	providerOpenCode = "opencode"
+	providerDeepSeek = "deepseek"
+	providerMiniMax  = "minimax"
+)
+
+// providers lists all known providers in menu order.
+var providers = []string{providerOpenCode, providerDeepSeek, providerMiniMax}
+
+// providerLabels maps provider name to display label.
+var providerLabels = map[string]string{
+	providerOpenCode: "OpenCode Go",
+	providerDeepSeek: "DeepSeek",
+	providerMiniMax:  "MiniMax",
+}
+
+// Maximum number of data rows any provider may return.
+const maxDataRows = 3
+
 var (
-	mTitle     *systray.MenuItem
-	mUpdated   *systray.MenuItem
-	mRolling   *systray.MenuItem
-	mWeekly    *systray.MenuItem
-	mMonthly   *systray.MenuItem
+	mTitle      *systray.MenuItem
+	mUpdated    *systray.MenuItem
+
+	// Radio buttons — one per provider.
+	mProviderRadio map[string]*systray.MenuItem
+
+	// Data rows — maxDataRows disabled items.
+	mDataRow [maxDataRows]*systray.MenuItem
+
 	mRefresh   *systray.MenuItem
-	mSetCookie *systray.MenuItem
-	mSetWS     *systray.MenuItem
+	mConfigure *systray.MenuItem
 	mQuit      *systray.MenuItem
 )
 
@@ -24,26 +47,37 @@ func main() {
 }
 
 func onReady() {
-	systray.SetIcon(neutralIconBytes())
-	systray.SetTooltip("OpenCode Go Usage")
+	cfg := loadCfg()
+	mProviderRadio = make(map[string]*systray.MenuItem)
 
-	mTitle = systray.AddMenuItem("OpenCode Go Usage", "")
+	systray.SetIcon(neutralIconBytes())
+	systray.SetTooltip("Usage Monitor")
+
+	mTitle = systray.AddMenuItem("Usage Monitor", "")
 	mTitle.Disable()
 	mUpdated = systray.AddMenuItem("Loading…", "")
 	mUpdated.Disable()
 	systray.AddSeparator()
 
-	mRolling = systray.AddMenuItem(meterLine("Rolling", nil), "")
-	mRolling.Disable()
-	mWeekly = systray.AddMenuItem(meterLine("Weekly", nil), "")
-	mWeekly.Disable()
-	mMonthly = systray.AddMenuItem(meterLine("Monthly", nil), "")
-	mMonthly.Disable()
+	// Radio group — one per provider.
+	for _, p := range providers {
+		label := providerLabels[p]
+		checked := p == cfg.ActiveProvider
+		item := systray.AddMenuItemCheckbox(label, "Show "+label+" usage", checked)
+		mProviderRadio[p] = item
+	}
 	systray.AddSeparator()
 
-	mRefresh = systray.AddMenuItem("Refresh Now", "Fetch latest usage data")
-	mSetCookie = systray.AddMenuItem("Set Cookie…", "Configure auth cookie")
-	mSetWS = systray.AddMenuItem("Set Workspace ID…", "Configure workspace ID")
+	// Data rows.
+	for i := range maxDataRows {
+		mDataRow[i] = systray.AddMenuItem("", "")
+		mDataRow[i].Disable()
+	}
+
+	systray.AddSeparator()
+
+	mRefresh = systray.AddMenuItem("Refresh Now", "")
+	mConfigure = systray.AddMenuItem("Configure Providers…", "")
 	systray.AddSeparator()
 	mQuit = systray.AddMenuItem("Quit", "")
 
@@ -53,74 +87,116 @@ func onReady() {
 
 func onExit() {}
 
+// loadCfg loads config with a safe default.
+func loadCfg() *Config {
+	cfg, err := loadConfig()
+	if err != nil {
+		return &Config{ActiveProvider: providerOpenCode}
+	}
+	if cfg.ActiveProvider == "" {
+		cfg.ActiveProvider = providerOpenCode
+	}
+	return cfg
+}
+
 // ---------- background refresh ----------
 
 func backgroundRefresh() {
-	doFetch()
+	fetchAllProviders()
+	updateMenu()
+
 	ticker := time.NewTicker(15 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
-		doFetch()
+		fetchAllProviders()
+		updateMenu()
 	}
 }
 
-func doFetch() {
-	cfg, err := loadConfig()
-	if err != nil {
-		mUpdated.SetTitle("⚠ Config error")
-		systray.SetIcon(neutralIconBytes())
-		systray.SetTooltip(fmt.Sprintf("Config error: %v", err))
-		return
+// fetchAllProviders fetches all providers in parallel.
+func fetchAllProviders() {
+	type result struct {
+		name string
+		r    *ProviderFetchResult
 	}
-	if cfg.AuthCookie == "" {
-		mUpdated.SetTitle("Not configured — Set Cookie…")
-		mRolling.SetTitle(meterLine("Rolling", nil))
-		mWeekly.SetTitle(meterLine("Weekly", nil))
-		mMonthly.SetTitle(meterLine("Monthly", nil))
-		systray.SetIcon(neutralIconBytes())
-		systray.SetTooltip("Not configured — set auth cookie")
-		return
+	ch := make(chan result, len(providers))
+
+	for _, p := range providers {
+		p := p
+		go func() {
+			var r *ProviderFetchResult
+			switch p {
+			case providerOpenCode:
+				r = fetchOpenCode(loadCfg())
+			case providerDeepSeek:
+				r = fetchDeepSeek(loadCfg())
+			case providerMiniMax:
+				r = fetchMiniMax(loadCfg())
+			default:
+				r = &ProviderFetchResult{Err: fmt.Errorf("unknown provider: %s", p)}
+			}
+			ch <- result{p, r}
+		}()
 	}
-	data, err := fetchUsage(cfg)
-	if err != nil {
-		mUpdated.SetTitle("⚠ Fetch failed")
-		systray.SetIcon(neutralIconBytes())
-		systray.SetTooltip(fmt.Sprintf("Error: %v", err))
-		return
+
+	for range providers {
+		res := <-ch
+		providerCache[res.name] = res.r
 	}
-	updateMenu(data)
 }
 
-func updateMenu(data *UsageData) {
+func updateMenu() {
+	cfg := loadCfg()
+	active := cfg.ActiveProvider
+
+	// Update radio checkboxes.
+	for _, p := range providers {
+		item := mProviderRadio[p]
+		if p == active {
+			item.Check()
+		} else {
+			item.Uncheck()
+		}
+	}
+
+	// Update data rows from cache.
+	r := providerCache[active]
 	mUpdated.SetTitle("Updated " + time.Now().Format("15:04"))
-	mRolling.SetTitle(meterLine("Rolling", &data.Rolling))
-	mWeekly.SetTitle(meterLine("Weekly", &data.Weekly))
-	mMonthly.SetTitle(meterLine("Monthly", &data.Monthly))
 
-	// Coloured menu-bar icon reflects monthly usage level.
-	systray.SetIcon(usageIconBytes(data.Monthly.Percent))
-	systray.SetTooltip(fmt.Sprintf("OCG — Rolling %d%% · Weekly %d%% · Monthly %d%%",
-		data.Rolling.Percent, data.Weekly.Percent, data.Monthly.Percent))
-}
-
-// meterLine: "Rolling    2%   2h 1m"  with a coloured status dot emoji.
-func meterLine(label string, m *Meter) string {
-	if m == nil {
-		return fmt.Sprintf("%-8s —", label)
+	if r == nil || r.Err != nil {
+		errMsg := "—"
+		if r != nil && r.Err != nil {
+			errMsg = r.Err.Error()
+			if len(errMsg) > 45 {
+				errMsg = errMsg[:45] + "…"
+			}
+		}
+		mDataRow[0].SetTitle(errMsg)
+		for i := 1; i < maxDataRows; i++ {
+			mDataRow[i].SetTitle("")
+		}
+		systray.SetIcon(neutralIconBytes())
+		return
 	}
-	return fmt.Sprintf("%-8s %3d%%   %s   %s", label, m.Percent, statusDot(m.Percent), formatDuration(m.ResetInSec))
-}
 
-// statusDot returns a coloured circle emoji by usage level.
-func statusDot(pct int) string {
-	switch {
-	case pct < 50:
-		return "🟢"
-	case pct < 85:
-		return "🟡"
-	default:
-		return "🔴"
+	// Set data lines.
+	for i := 0; i < maxDataRows; i++ {
+		if i < len(r.Lines) {
+			mDataRow[i].SetTitle(r.Lines[i])
+		} else {
+			mDataRow[i].SetTitle("")
+		}
 	}
+
+	// Icon: use the highest criticality across all providers.
+	maxCrit := 0
+	for _, cached := range providerCache {
+		if cached != nil && cached.Err == nil && cached.Criticality > maxCrit {
+			maxCrit = cached.Criticality
+		}
+	}
+	systray.SetIcon(usageIconBytes(maxCrit))
+	systray.SetTooltip(fmt.Sprintf("Usage Monitor — worst: %d%%", maxCrit))
 }
 
 // ---------- menu click handlers ----------
@@ -129,18 +205,68 @@ func handleClicks() {
 	for {
 		select {
 		case <-mRefresh.ClickedCh:
-			go doFetch()
-		case <-mSetCookie.ClickedCh:
-			if promptSetCookie() {
-				go doFetch()
-			}
-		case <-mSetWS.ClickedCh:
-			if promptSetWorkspace() {
-				go doFetch()
-			}
+			go func() {
+				fetchAllProviders()
+				updateMenu()
+			}()
+		case <-mConfigure.ClickedCh:
+			promptConfigureProviders()
+			go func() {
+				fetchAllProviders()
+				updateMenu()
+			}()
 		case <-mQuit.ClickedCh:
 			systray.Quit()
 			return
+		case <-mProviderRadio[providerOpenCode].ClickedCh:
+			switchProvider(providerOpenCode)
+		case <-mProviderRadio[providerDeepSeek].ClickedCh:
+			switchProvider(providerDeepSeek)
+		case <-mProviderRadio[providerMiniMax].ClickedCh:
+			switchProvider(providerMiniMax)
+		}
+	}
+}
+
+func switchProvider(name string) {
+	cfg := loadCfg()
+	if cfg.ActiveProvider == name {
+		return
+	}
+	cfg.ActiveProvider = name
+	_ = saveConfig(cfg)
+
+	// Update radio checks and data display.
+	for _, p := range providers {
+		if p == name {
+			mProviderRadio[p].Check()
+		} else {
+			mProviderRadio[p].Uncheck()
+		}
+	}
+
+	// Fill data rows for the newly selected provider.
+	r := providerCache[name]
+	mUpdated.SetTitle("Updated " + time.Now().Format("15:04"))
+	if r != nil && r.Err == nil {
+		for i := 0; i < maxDataRows; i++ {
+			if i < len(r.Lines) {
+				mDataRow[i].SetTitle(r.Lines[i])
+			} else {
+				mDataRow[i].SetTitle("")
+			}
+		}
+	} else {
+		errMsg := "—"
+		if r != nil && r.Err != nil {
+			errMsg = r.Err.Error()
+			if len(errMsg) > 45 {
+				errMsg = errMsg[:45] + "…"
+			}
+		}
+		mDataRow[0].SetTitle(errMsg)
+		for i := 1; i < maxDataRows; i++ {
+			mDataRow[i].SetTitle("")
 		}
 	}
 }
