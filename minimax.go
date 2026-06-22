@@ -72,91 +72,91 @@ func fetchMiniMax(cfg *Config) *ProviderFetchResult {
 		msg := getString(raw, "status_msg")
 		return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("api error: %s", msg)}
 	}
+	// Response structure (from actual API call):
+	// {"base_resp": {"status_code":0, "status_msg":"success"},
+	//  "model_remains": [{
+	//    "model_name": "general",
+	//    "current_interval_remaining_percent": 76,   ← remaining % (not used)
+	//    "current_weekly_remaining_percent": 100,
+	//    "current_interval_total_count": 0,           ← always 0, ignore
+	//    "current_interval_usage_count": 0,           ← always 0, ignore
+	//    "current_interval_status": 1,
+	//    "current_weekly_status": 3,
+	//    "start_time": 1782104400000,                 ← ms epoch
+	//    "end_time": 1782122400000,
+	//    "weekly_start_time": 1782086400000,
+	//    "weekly_end_time": 1782691200000,
+	//    "remains_time": 3522055,
+	//    "weekly_remains_time": 572322055
+	//  }, ...]}
 
-	// Try data wrapper first, then fall back to root level.
-	dataObj := getMap(raw, "data")
-	if dataObj == nil {
-		dataObj = raw // flat response with model_remains at root
-	}
-
-
-	// Get model_remains array (try both naming conventions).
-	remains := getSlice(dataObj, "model_remains", "modelRemains")
+	// model_remains is at root level (no "data" wrapper).
+	remains := getSlice(raw, "model_remains", "modelRemains")
 	if remains == nil {
-		return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("no model_remains, keys: %v", keysOf(dataObj))}
+		// Try data wrapper as fallback.
+		if dataObj := getMap(raw, "data"); dataObj != nil {
+			remains = getSlice(dataObj, "model_remains", "modelRemains")
+		}
+	}
+	if remains == nil {
+		return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("no model_remains")}
 	}
 
-	// Find first model entry that has any usable quota data.
-	// Try many possible field names since the API is inconsistent.
+	// Find the "general" model entry (skip video/image/etc).
 	var entry map[string]any
 	for _, item := range remains {
 		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		if pickMiniMaxEntry(m) {
+		name := getString(m, "model_name", "modelName")
+		if name == "general" || name == "chat" || name == "text" {
 			entry = m
 			break
 		}
 	}
 	if entry == nil {
-		// Fallback: just use the first entry — we'll display whatever we find.
-		if len(remains) > 0 {
-			if m, ok := remains[0].(map[string]any); ok {
-				entry = m
-			}
+		if m, ok := remains[0].(map[string]any); ok {
+			entry = m
 		}
-		if entry == nil {
-			return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("no models in plan")}
+	}
+	if entry == nil {
+		return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("no model data")}
+	}
+
+	// The real data is in *_remaining_percent fields (remaining, not used).
+	intervalRemainingPct := getFloat(entry,
+		"current_interval_remaining_percent", "currentIntervalRemainingPercent")
+	weeklyRemainingPct := getFloat(entry,
+		"current_weekly_remaining_percent", "currentWeeklyRemainingPercent")
+
+	intervalUsedPct := int(100 - intervalRemainingPct)
+	weeklyUsedPct := int(100 - weeklyRemainingPct)
+
+	// Compute reset times from ms-epoch timestamps.
+	reset5h := ""
+	if endMs := getFloat(entry, "end_time", "endTime"); endMs > 0 {
+		t := time.Unix(int64(endMs/1000), 0)
+		if d := time.Until(t); d > 0 {
+			reset5h = fmt.Sprintf("%dh", int(d.Hours())+1)
+		}
+	}
+	resetWeek := ""
+	if weekEndMs := getFloat(entry, "weekly_end_time", "weeklyEndTime"); weekEndMs > 0 {
+		t := time.Unix(int64(weekEndMs/1000), 0)
+		if d := time.Until(t); d > 0 {
+			resetWeek = fmt.Sprintf("%dd", int(d.Hours()/24)+1)
 		}
 	}
 
-	// Read all possible fields with many naming variants.
-	// (usage_count = remaining per MiniMax docs; total_count = total)
-	total := getFloat(entry,
-		"current_interval_total_count", "currentIntervalTotalCount",
-		"interval_total_count", "intervalTotalCount",
-		"total_count", "totalCount",
-		"interval_quota", "intervalQuota")
-	remaining := getFloat(entry,
-		"current_interval_usage_count", "currentIntervalUsageCount",
-		"interval_usage_count", "intervalUsageCount",
-		"interval_remaining", "intervalRemaining")
-	weeklyTotal := getFloat(entry,
-		"current_weekly_total_count", "currentWeeklyTotalCount",
-		"weekly_total_count", "weeklyTotalCount",
-		"weekly_quota", "weeklyQuota")
-	weeklyRemaining := getFloat(entry,
-		"current_weekly_usage_count", "currentWeeklyUsageCount",
-		"weekly_usage_count", "weeklyUsageCount",
-		"weekly_remaining", "weeklyRemaining")
-	usagePct := getFloat(entry,
-		"usage_percent", "usagePercent",
-		"remaining_percent", "remainingPercent") // remaining % per MiniMax docs
-
-	// Compute used, preferring count-based fields.
-	var intervalUsedPct, weeklyUsedPct int
-	if total > 0 && remaining >= 0 {
-		used := total - remaining
-		intervalUsedPct = int(used / total * 100)
-	} else if usagePct > 0 {
-		// usagePct is remaining percent per MiniMax docs.
-		intervalUsedPct = int(100 - usagePct)
-	}
-	if weeklyTotal > 0 && weeklyRemaining >= 0 {
-		used := weeklyTotal - weeklyRemaining
-		weeklyUsedPct = int(used / weeklyTotal * 100)
-	} else {
-		weeklyUsedPct = intervalUsedPct
-	}
 	criticality := intervalUsedPct
 	if weeklyUsedPct > criticality {
 		criticality = weeklyUsedPct
 	}
 
 	lines := []string{
-		fmt.Sprintf("5h window  %3d%% used  %s", intervalUsedPct, statusDot(intervalUsedPct)),
-		fmt.Sprintf("weekly     %3d%% used  %s", weeklyUsedPct, statusDot(weeklyUsedPct)),
+		fmt.Sprintf("5h     %3d%% used  %s  %s", intervalUsedPct, statusDot(intervalUsedPct), reset5h),
+		fmt.Sprintf("weekly %3d%% used  %s  %s", weeklyUsedPct, statusDot(weeklyUsedPct), resetWeek),
 	}
 
 	return &ProviderFetchResult{
@@ -243,45 +243,3 @@ func getSlice(m map[string]any, keys ...string) []any {
 	return nil
 }
 
-func keysOf(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
-// pickMiniMaxEntry returns true if the entry has any usable quota field.
-func pickMiniMaxEntry(m map[string]any) bool {
-	intervalKeys := []string{
-		"current_interval_total_count", "currentIntervalTotalCount",
-		"interval_total_count", "intervalTotalCount",
-		"total_count", "totalCount",
-		"interval_quota", "intervalQuota",
-		"current_interval_usage_count", "currentIntervalUsageCount",
-		"interval_usage_count", "intervalUsageCount",
-		"interval_remaining", "intervalRemaining",
-	}
-	weeklyKeys := []string{
-		"current_weekly_total_count", "currentWeeklyTotalCount",
-		"weekly_total_count", "weeklyTotalCount",
-		"weekly_quota", "weeklyQuota",
-		"current_weekly_usage_count", "currentWeeklyUsageCount",
-		"weekly_usage_count", "weeklyUsageCount",
-		"weekly_remaining", "weeklyRemaining",
-	}
-	pctKeys := []string{
-		"usage_percent", "usagePercent",
-		"remaining_percent", "remainingPercent",
-	}
-	if getFloat(m, intervalKeys...) > 0 {
-		return true
-	}
-	if getFloat(m, weeklyKeys...) > 0 {
-		return true
-	}
-	if getFloat(m, pctKeys...) > 0 {
-		return true
-	}
-	return false
-}
