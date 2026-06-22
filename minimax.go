@@ -86,39 +86,56 @@ func fetchMiniMax(cfg *Config) *ProviderFetchResult {
 		return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("no model_remains, keys: %v", keysOf(dataObj))}
 	}
 
-	// Find first text model with non-zero total count (interval or weekly).
+	// Find first model entry that has any usable quota data.
+	// Try many possible field names since the API is inconsistent.
 	var entry map[string]any
 	for _, item := range remains {
 		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		total := getFloat(m, "current_interval_total_count", "currentIntervalTotalCount")
-		weekly := getFloat(m, "current_weekly_total_count", "currentWeeklyTotalCount")
-		pct := getFloat(m, "usage_percent", "usagePercent")
-		if total > 0 || weekly > 0 || pct > 0 {
+		if pickMiniMaxEntry(m) {
 			entry = m
 			break
 		}
 	}
 	if entry == nil {
-		// No quota data — keep error short for menu display.
-		if len(remains) == 0 {
+		// Fallback: just use the first entry — we'll display whatever we find.
+		if len(remains) > 0 {
+			if m, ok := remains[0].(map[string]any); ok {
+				entry = m
+			}
+		}
+		if entry == nil {
 			return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("no models in plan")}
 		}
-		return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("no quota data for model")}
 	}
 
-	// Read fields: usage_count = remaining, total_count = total.
-	total := getFloat(entry, "current_interval_total_count", "currentIntervalTotalCount")
-	remaining := getFloat(entry, "current_interval_usage_count", "currentIntervalUsageCount")
-	weeklyTotal := getFloat(entry, "current_weekly_total_count", "currentWeeklyTotalCount")
-	weeklyRemaining := getFloat(entry, "current_weekly_usage_count", "currentWeeklyUsageCount")
-	usagePct := getFloat(entry, "usage_percent", "usagePercent") // remaining %
+	// Read all possible fields with many naming variants.
+	// (usage_count = remaining per MiniMax docs; total_count = total)
+	total := getFloat(entry,
+		"current_interval_total_count", "currentIntervalTotalCount",
+		"interval_total_count", "intervalTotalCount",
+		"total_count", "totalCount",
+		"interval_quota", "intervalQuota")
+	remaining := getFloat(entry,
+		"current_interval_usage_count", "currentIntervalUsageCount",
+		"interval_usage_count", "intervalUsageCount",
+		"interval_remaining", "intervalRemaining")
+	weeklyTotal := getFloat(entry,
+		"current_weekly_total_count", "currentWeeklyTotalCount",
+		"weekly_total_count", "weeklyTotalCount",
+		"weekly_quota", "weeklyQuota")
+	weeklyRemaining := getFloat(entry,
+		"current_weekly_usage_count", "currentWeeklyUsageCount",
+		"weekly_usage_count", "weeklyUsageCount",
+		"weekly_remaining", "weeklyRemaining")
+	usagePct := getFloat(entry,
+		"usage_percent", "usagePercent",
+		"remaining_percent", "remainingPercent") // remaining % per MiniMax docs
 
 	// Compute used, preferring count-based fields.
 	var intervalUsedPct, weeklyUsedPct int
-
 	if total > 0 && remaining >= 0 {
 		used := total - remaining
 		intervalUsedPct = int(used / total * 100)
@@ -126,14 +143,12 @@ func fetchMiniMax(cfg *Config) *ProviderFetchResult {
 		// usagePct is remaining percent per MiniMax docs.
 		intervalUsedPct = int(100 - usagePct)
 	}
-
 	if weeklyTotal > 0 && weeklyRemaining >= 0 {
 		used := weeklyTotal - weeklyRemaining
 		weeklyUsedPct = int(used / weeklyTotal * 100)
 	} else {
-		weeklyUsedPct = intervalUsedPct // fallback
+		weeklyUsedPct = intervalUsedPct
 	}
-
 	criticality := intervalUsedPct
 	if weeklyUsedPct > criticality {
 		criticality = weeklyUsedPct
@@ -234,4 +249,39 @@ func keysOf(m map[string]any) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// pickMiniMaxEntry returns true if the entry has any usable quota field.
+func pickMiniMaxEntry(m map[string]any) bool {
+	intervalKeys := []string{
+		"current_interval_total_count", "currentIntervalTotalCount",
+		"interval_total_count", "intervalTotalCount",
+		"total_count", "totalCount",
+		"interval_quota", "intervalQuota",
+		"current_interval_usage_count", "currentIntervalUsageCount",
+		"interval_usage_count", "intervalUsageCount",
+		"interval_remaining", "intervalRemaining",
+	}
+	weeklyKeys := []string{
+		"current_weekly_total_count", "currentWeeklyTotalCount",
+		"weekly_total_count", "weeklyTotalCount",
+		"weekly_quota", "weeklyQuota",
+		"current_weekly_usage_count", "currentWeeklyUsageCount",
+		"weekly_usage_count", "weeklyUsageCount",
+		"weekly_remaining", "weeklyRemaining",
+	}
+	pctKeys := []string{
+		"usage_percent", "usagePercent",
+		"remaining_percent", "remainingPercent",
+	}
+	if getFloat(m, intervalKeys...) > 0 {
+		return true
+	}
+	if getFloat(m, weeklyKeys...) > 0 {
+		return true
+	}
+	if getFloat(m, pctKeys...) > 0 {
+		return true
+	}
+	return false
 }
