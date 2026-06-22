@@ -102,12 +102,11 @@ func fetchMiniMax(cfg *Config) *ProviderFetchResult {
 		}
 	}
 	if entry == nil {
-		if len(remains) > 0 {
-			if m, ok := remains[0].(map[string]any); ok {
-				return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("first model entry keys: %v", keysOf(m))}
-			}
+		// No quota data — keep error short for menu display.
+		if len(remains) == 0 {
+			return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("no models in plan")}
 		}
-		return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("no model with quota data (remains len=%d)", len(remains))}
+		return &ProviderFetchResult{Criticality: 0, Err: fmt.Errorf("no quota data for model")}
 	}
 
 	// Read fields: usage_count = remaining, total_count = total.

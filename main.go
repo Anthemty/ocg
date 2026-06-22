@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/getlantern/systray"
@@ -162,34 +163,16 @@ func updateMenu() {
 			item.Uncheck()
 		}
 	}
-
 	// Update data rows from cache.
 	r := providerCache[active]
 	mUpdated.SetTitle("Updated " + time.Now().Format("15:04"))
 
-	if r == nil || r.Err != nil {
-		errMsg := "—"
-		if r != nil && r.Err != nil {
-			errMsg = r.Err.Error()
-			if len(errMsg) > 45 {
-				errMsg = errMsg[:45] + "…"
-			}
-		}
-		mDataRow[0].SetTitle(errMsg)
-		for i := 1; i < maxDataRows; i++ {
-			mDataRow[i].SetTitle("")
-		}
-		systray.SetIcon(neutralIconBytes())
-		return
-	}
-
-	// Set data lines.
-	for i := 0; i < maxDataRows; i++ {
-		if i < len(r.Lines) {
-			mDataRow[i].SetTitle(r.Lines[i])
-		} else {
-			mDataRow[i].SetTitle("")
-		}
+	if r == nil {
+		setDataRows([]string{"— not fetched —"}, true)
+	} else if r.Err != nil {
+		setDataRows([]string{r.Err.Error()}, true)
+	} else {
+		setDataRows(r.Lines, false)
 	}
 
 	// Icon: use the highest criticality across all providers.
@@ -199,8 +182,40 @@ func updateMenu() {
 			maxCrit = cached.Criticality
 		}
 	}
-	systray.SetIcon(usageIconBytes(maxCrit))
+	if r == nil || r.Err != nil {
+		systray.SetIcon(neutralIconBytes())
+	} else {
+		systray.SetIcon(usageIconBytes(maxCrit))
+	}
 	systray.SetTooltip(fmt.Sprintf("Usage Monitor — worst: %d%%", maxCrit))
+}
+
+// setDataRows writes the given lines to the menu data rows.
+// If singleLine is true, all lines are joined into one menu item;
+// otherwise each line gets its own row.
+func setDataRows(lines []string, singleLine bool) {
+	if singleLine {
+		joined := strings.Join(lines, " · ")
+		if len(joined) > 60 {
+			joined = joined[:60] + "…"
+		}
+		mDataRow[0].SetTitle(joined)
+		for i := 1; i < maxDataRows; i++ {
+			mDataRow[i].SetTitle("")
+		}
+		return
+	}
+	for i := 0; i < maxDataRows; i++ {
+		if i < len(lines) {
+			title := lines[i]
+			if len(title) > 60 {
+				title = title[:60] + "…"
+			}
+			mDataRow[i].SetTitle(title)
+		} else {
+			mDataRow[i].SetTitle("")
+		}
+	}
 }
 
 // ---------- menu click handlers ----------
@@ -265,25 +280,11 @@ func switchProvider(name string) {
 	// Fill data rows for the newly selected provider.
 	r := providerCache[name]
 	mUpdated.SetTitle("Updated " + time.Now().Format("15:04"))
-	if r != nil && r.Err == nil {
-		for i := 0; i < maxDataRows; i++ {
-			if i < len(r.Lines) {
-				mDataRow[i].SetTitle(r.Lines[i])
-			} else {
-				mDataRow[i].SetTitle("")
-			}
-		}
+	if r == nil {
+		setDataRows([]string{"— not fetched —"}, true)
+	} else if r.Err != nil {
+		setDataRows([]string{r.Err.Error()}, true)
 	} else {
-		errMsg := "—"
-		if r != nil && r.Err != nil {
-			errMsg = r.Err.Error()
-			if len(errMsg) > 45 {
-				errMsg = errMsg[:45] + "…"
-			}
-		}
-		mDataRow[0].SetTitle(errMsg)
-		for i := 1; i < maxDataRows; i++ {
-			mDataRow[i].SetTitle("")
-		}
+		setDataRows(r.Lines, false)
 	}
 }
