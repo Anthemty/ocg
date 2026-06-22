@@ -1,3 +1,8 @@
+// icon.go generates the menu bar status icon as a monochrome template image.
+//
+// Template images use only alpha to encode shape: AppKit recolours them to
+// match the menu bar (white on dark, black on light). We draw a ring whose
+// interior fills proportionally to usage — a single-colour, linear gauge.
 package main
 
 import (
@@ -8,74 +13,81 @@ import (
 	"math"
 )
 
-// usageIconBytes generates a coloured circular status icon for the menu bar.
-// Colour depends on monthly usage: green (<50%), yellow (50-84%), red (≥85%).
-// A white arc inside visualises the fill level. Size 22×22 for retina.
+// usageIconBytes generates a monochrome template icon for the menu bar.
+// A ring outlines the gauge; a solid sector inside fills clockwise to the
+// usage percentage. All pixels are opaque black with varying alpha — AppKit
+// applies the correct tint at render time.
 func usageIconBytes(monthlyPct int) []byte {
-	const size = 22
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	cx, cy := float64(size)/2, float64(size)/2
-	outerR := float64(size)/2 - 1
-	innerR := outerR - 3
+	return gaugeIconBytes(clampPercent(monthlyPct))
+}
 
-	col := usageColorRGBA(monthlyPct)
+// neutralIconBytes returns an empty ring for unconfigured / error states.
+func neutralIconBytes() []byte {
+	return gaugeIconBytes(-1) // negative => no fill
+}
+
+// gaugeIconBytes draws the template gauge. fillPct < 0 means no interior fill.
+func gaugeIconBytes(fillPct int) []byte {
+	const size = 22
+	const center = float64(size)/2 - 0.5
+	outerR := float64(size)/2 - 1
+	innerR := outerR - 2.5
+
+	img := image.NewRGBA(image.Rect(0, 0, size, size))
+	black := color.RGBA{R: 0, G: 0, B: 0, A: 255}
 
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
-			dx := float64(x) - cx + 0.5
-			dy := float64(y) - cy + 0.5
+			dx := float64(x) - center
+			dy := float64(y) - center
 			dist := math.Sqrt(dx*dx + dy*dy)
-			if dist <= outerR {
-				if dist >= innerR {
-					// ring: coloured
-					img.Set(x, y, col)
-				} else {
-					// interior: fill proportional arc
-					angle := math.Atan2(dy, dx) + math.Pi/2 // 0 at top
-					if angle < 0 {
-						angle += 2 * math.Pi
-					}
-					threshold := 2 * math.Pi * float64(monthlyPct) / 100
-					if angle <= threshold && monthlyPct > 0 {
-						img.Set(x, y, col)
-					}
+
+			// Ring: solid between innerR and outerR.
+			if dist >= innerR && dist <= outerR {
+				// Anti-alias the outer/inner edges for a crisp 1px ring.
+				alpha := 255.0
+				if dist > outerR-1 {
+					alpha *= outerR - dist // fade out at outer edge
+				} else if dist < innerR+1 {
+					alpha *= dist - innerR // fade in at inner edge
+				}
+				if alpha < 0 {
+					alpha = 0
+				}
+				if alpha > 255 {
+					alpha = 255
+				}
+				img.Set(x, y, color.RGBA{A: uint8(alpha)})
+				continue
+			}
+
+			// Interior fill: solid sector clockwise from top, proportional to fillPct.
+			if dist < innerR && fillPct > 0 {
+				angle := math.Atan2(dy, dx) + math.Pi/2 // 0 at top
+				if angle < 0 {
+					angle += 2 * math.Pi
+				}
+				threshold := 2 * math.Pi * float64(fillPct) / 100
+				if angle <= threshold {
+					img.Set(x, y, black)
 				}
 			}
 		}
 	}
+
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)
 	return buf.Bytes()
 }
 
-// neutralIconBytes returns a grey circle for unconfigured / error states.
-func neutralIconBytes() []byte {
-	const size = 22
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	cx, cy := float64(size)/2, float64(size)/2
-	r := float64(size)/2 - 1
-	grey := color.RGBA{R: 150, G: 150, B: 150, A: 255}
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			dx := float64(x) - cx + 0.5
-			dy := float64(y) - cy + 0.5
-			if dx*dx+dy*dy <= r*r {
-				img.Set(x, y, grey)
-			}
-		}
-	}
-	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
-	return buf.Bytes()
-}
-
-func usageColorRGBA(pct int) color.RGBA {
+// clampPercent bounds a percentage to [0, 100].
+func clampPercent(pct int) int {
 	switch {
-	case pct < 50:
-		return color.RGBA{R: 52, G: 199, B: 89, A: 255} // system green
-	case pct < 85:
-		return color.RGBA{R: 255, G: 159, B: 10, A: 255} // system yellow
+	case pct < 0:
+		return 0
+	case pct > 100:
+		return 100
 	default:
-		return color.RGBA{R: 255, G: 69, B: 58, A: 255} // system red
+		return pct
 	}
 }

@@ -97,9 +97,15 @@ func fetchOpenCode(cfg *Config) *ProviderFetchResult {
 		fmt.Sprintf("Weekly  %3d%% %s %s", w.Percent, statusDot(w.Percent), formatDuration(w.ResetInSec)),
 		fmt.Sprintf("Monthly %3d%% %s %s", mo.Percent, statusDot(mo.Percent), formatDuration(mo.ResetInSec)),
 	}
+	meters := []UsageMeter{
+		{Label: "Rolling", Percent: r.Percent, Detail: formatDuration(r.ResetInSec)},
+		{Label: "Weekly", Percent: w.Percent, Detail: formatDuration(w.ResetInSec)},
+		{Label: "Monthly", Percent: mo.Percent, Detail: formatDuration(mo.ResetInSec)},
+	}
 
 	return &ProviderFetchResult{
 		Criticality: maxPct,
 		Lines:       lines,
+		Meters:      meters,
 	}
 }

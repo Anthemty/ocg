@@ -10,15 +10,15 @@ import (
 
 // deepseekBalanceResp matches the GET /user/balance response.
 type deepseekBalanceResp struct {
-	IsAvailable bool                       `json:"is_available"`
-	BalanceInfos []deepseekBalanceInfo     `json:"balance_infos"`
+	IsAvailable  bool                  `json:"is_available"`
+	BalanceInfos []deepseekBalanceInfo `json:"balance_infos"`
 }
 
 type deepseekBalanceInfo struct {
-	Currency         string `json:"currency"`
-	TotalBalance     string `json:"total_balance"`
-	GrantedBalance   string `json:"granted_balance"`
-	ToppedUpBalance  string `json:"topped_up_balance"`
+	Currency        string `json:"currency"`
+	TotalBalance    string `json:"total_balance"`
+	GrantedBalance  string `json:"granted_balance"`
+	ToppedUpBalance string `json:"topped_up_balance"`
 }
 
 // fetchDeepSeek fetches balance from api.deepseek.com.
@@ -100,10 +100,16 @@ func fetchDeepSeek(cfg *Config) *ProviderFetchResult {
 		fmt.Sprintf("Granted  %s%s", cur, grantedStr),
 		fmt.Sprintf("Topped   %s%s", cur, toppedUpStr),
 	}
+	meters := []UsageMeter{
+		{Label: "Balance", Percent: criticality, Detail: fmt.Sprintf("%s%s left", cur, totalStr)},
+		{Label: "Granted", Percent: 0, Detail: cur + grantedStr},
+		{Label: "Topped", Percent: 0, Detail: cur + toppedUpStr},
+	}
 
 	return &ProviderFetchResult{
 		Criticality: criticality,
 		Lines:       lines,
+		Meters:      meters,
 	}
 }
 

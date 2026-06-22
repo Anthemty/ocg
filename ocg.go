@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 // ---------- Config ----------
 
 type Config struct {
-	ActiveProvider string          `json:"active_provider"` // "opencode" | "deepseek" | "minimax"
-	OpenCode       OpenCodeConfig  `json:"opencode"`
-	DeepSeek       DeepSeekConfig  `json:"deepseek"`
-	Minimax        MinimaxConfig   `json:"minimax"`
+	ActiveProvider string         `json:"active_provider"` // "opencode" | "deepseek" | "minimax"
+	OpenCode       OpenCodeConfig `json:"opencode"`
+	DeepSeek       DeepSeekConfig `json:"deepseek"`
+	Minimax        MinimaxConfig  `json:"minimax"`
 }
 
 type OpenCodeConfig struct {
@@ -50,13 +51,24 @@ type Meter struct {
 
 // ProviderFetchResult holds the data for one provider after a fetch cycle.
 type ProviderFetchResult struct {
-	Criticality int      // 0-100, for icon colour
-	Err         error    // non-nil if fetch failed
-	Lines       []string // formatted display lines
+	Criticality int          // 0-100, for icon colour
+	Err         error        // non-nil if fetch failed
+	Lines       []string     // fallback formatted display lines
+	Meters      []UsageMeter // structured usage rows for progress rendering
+}
+
+type UsageMeter struct {
+	Label   string `json:"label"`
+	Percent int    `json:"percent"`
+	Detail  string `json:"detail"`
 }
 
 // providerCache holds the latest fetch result per provider.
-var providerCache = make(map[string]*ProviderFetchResult)
+var (
+	providerCache = make(map[string]*ProviderFetchResult)
+	cacheMu       sync.RWMutex
+	lastUpdated   time.Time
+)
 
 // ---------- Config file ----------
 

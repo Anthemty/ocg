@@ -7,7 +7,7 @@ all: app
 
 build: $(BINARY)
 
-$(BINARY): go.mod go.sum main.go ocg.go opencode.go deepseek.go minimax.go login.go icon.go
+$(BINARY): go.mod go.sum main.go app_darwin.go app_darwin.m ocg.go opencode.go deepseek.go minimax.go icon.go
 	CGO_ENABLED=1 go build -o $@ .
 
 app: $(BINARY)

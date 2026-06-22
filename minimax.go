@@ -158,10 +158,15 @@ func fetchMiniMax(cfg *Config) *ProviderFetchResult {
 		fmt.Sprintf("5h     %3d%% used  %s  %s", intervalUsedPct, statusDot(intervalUsedPct), reset5h),
 		fmt.Sprintf("weekly %3d%% used  %s  %s", weeklyUsedPct, statusDot(weeklyUsedPct), resetWeek),
 	}
+	meters := []UsageMeter{
+		{Label: "5h", Percent: intervalUsedPct, Detail: reset5h},
+		{Label: "Weekly", Percent: weeklyUsedPct, Detail: resetWeek},
+	}
 
 	return &ProviderFetchResult{
 		Criticality: criticality,
 		Lines:       lines,
+		Meters:      meters,
 	}
 }
 
@@ -242,4 +247,3 @@ func getSlice(m map[string]any, keys ...string) []any {
 	}
 	return nil
 }
-

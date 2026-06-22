@@ -1,11 +1,32 @@
+//go:build darwin
+
 package main
+
+/*
+#cgo darwin CFLAGS: -x objective-c -fobjc-arc
+#cgo darwin LDFLAGS: -framework Cocoa
+
+#include <stddef.h>
+#include <stdlib.h>
+
+// Implemented in app_darwin.m. All UI work is marshalled to the main queue.
+void runApp(void);
+void setStatusIcon(const void* bytes, size_t len);
+void setStatusTooltip(const char* tooltip);
+void updatePanelState(const char* stateJSON);
+
+// Go callbacks invoked from Obj-C are declared via //export below; cgo
+// generates their prototypes in _cgo_export.h automatically. Do NOT redeclare
+// them here — a manual extern with const clashes with the generated decl.
+*/
+import "C"
 
 import (
 	"fmt"
-	"strings"
+	"runtime"
+	"sync"
 	"time"
-
-	"github.com/getlantern/systray"
+	"unsafe"
 )
 
 // Provider names.
@@ -15,7 +36,7 @@ const (
 	providerMiniMax  = "minimax"
 )
 
-// providers lists all known providers in menu order.
+// providers lists all known providers in sidebar order.
 var providers = []string{providerOpenCode, providerDeepSeek, providerMiniMax}
 
 // providerLabels maps provider name to display label.
@@ -25,97 +46,34 @@ var providerLabels = map[string]string{
 	providerMiniMax:  "MiniMax",
 }
 
-// Maximum number of data rows any provider may return.
-const maxDataRows = 3
-
-var (
-	mTitle      *systray.MenuItem
-	mUpdated    *systray.MenuItem
-
-	// Radio buttons — one per provider.
-	mProviderRadio map[string]*systray.MenuItem
-
-	// Data rows — maxDataRows disabled items.
-	mDataRow [maxDataRows]*systray.MenuItem
-
-	mRefresh            *systray.MenuItem
-	mConfigureOpenCode  *systray.MenuItem
-	mConfigureDS        *systray.MenuItem
-	mConfigureMX        *systray.MenuItem
-	mQuit               *systray.MenuItem
-)
+// refreshMu serialises explicit refresh requests so we don't stack fetches.
+var refreshMu sync.Mutex
 
 func main() {
-	systray.Run(onReady, onExit)
-}
-
-func onReady() {
-	cfg := loadCfg()
-	mProviderRadio = make(map[string]*systray.MenuItem)
-
-	systray.SetIcon(neutralIconBytes())
-	systray.SetTooltip("Usage Monitor")
-
-	mTitle = systray.AddMenuItem("Usage Monitor", "")
-	mTitle.Disable()
-	mUpdated = systray.AddMenuItem("Loading…", "")
-	mUpdated.Disable()
-	systray.AddSeparator()
-
-	// Radio group — one per provider.
-	for _, p := range providers {
-		label := providerLabels[p]
-		checked := p == cfg.ActiveProvider
-		item := systray.AddMenuItemCheckbox(label, "Show "+label+" usage", checked)
-		mProviderRadio[p] = item
-	}
-	systray.AddSeparator()
-
-	// Data rows.
-	for i := range maxDataRows {
-		mDataRow[i] = systray.AddMenuItem("", "")
-		mDataRow[i].Disable()
-	}
-
-	systray.AddSeparator()
-
-	mRefresh = systray.AddMenuItem("Refresh Now", "")
-	systray.AddSeparator()
-	mConfigureOpenCode = systray.AddMenuItem("OpenCode Cookie…", "Set OpenCode auth cookie")
-	mConfigureDS = systray.AddMenuItem("DeepSeek Key…", "Set DeepSeek API key")
-	mConfigureMX = systray.AddMenuItem("MiniMax Key…", "Set MiniMax API key")
-	systray.AddSeparator()
-	mQuit = systray.AddMenuItem("Quit", "")
-	go backgroundRefresh()
-	go handleClicks()
-}
-
-func onExit() {}
-
-// loadCfg loads config with a safe default.
-func loadCfg() *Config {
-	cfg, err := loadConfig()
-	if err != nil {
-		return &Config{ActiveProvider: providerOpenCode}
-	}
-	if cfg.ActiveProvider == "" {
-		cfg.ActiveProvider = providerOpenCode
-	}
-	return cfg
+	// NSApplication's run loop must live on the main thread. Under darwin cgo
+	// the main goroutine is the main thread; lock it and hand control to AppKit.
+	runtime.LockOSThread()
+	C.runApp()
 }
 
 // ---------- background refresh ----------
 
+// backgroundRefresh runs in its own goroutine, fetching all providers and
+// pushing the resulting state to the UI. It loops on a 15-minute ticker.
 func backgroundRefresh() {
-	fetchAllProviders()
-	updateMenu()
-
+	refreshOnce()
 	ticker := time.NewTicker(15 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
-		fetchAllProviders()
-		updateMenu()
+		refreshOnce()
 	}
+}
+
+func refreshOnce() {
+	refreshMu.Lock()
+	defer refreshMu.Unlock()
+	fetchAllProviders()
+	pushUIState()
 }
 
 // fetchAllProviders fetches all providers in parallel.
@@ -146,120 +104,55 @@ func fetchAllProviders() {
 
 	for range providers {
 		res := <-ch
+		cacheMu.Lock()
 		providerCache[res.name] = res.r
+		cacheMu.Unlock()
 	}
+	cacheMu.Lock()
+	lastUpdated = time.Now()
+	cacheMu.Unlock()
 }
 
-func updateMenu() {
-	cfg := loadCfg()
-	active := cfg.ActiveProvider
-
-	// Update radio checkboxes.
-	for _, p := range providers {
-		item := mProviderRadio[p]
-		if p == active {
-			item.Check()
-		} else {
-			item.Uncheck()
-		}
-	}
-	// Update data rows from cache.
-	r := providerCache[active]
-	mUpdated.SetTitle("Updated " + time.Now().Format("15:04"))
-
-	if r == nil {
-		setDataRows([]string{"— not fetched —"}, true)
-	} else if r.Err != nil {
-		setDataRows([]string{r.Err.Error()}, true)
-	} else {
-		setDataRows(r.Lines, false)
-	}
-
-	// Icon: use the highest criticality across all providers.
+// pushUIState recomputes icon/tooltip/state and forwards them to the UI.
+// Called only from the refresh goroutine and from cgo callbacks (main queue).
+func pushUIState() {
+	cacheMu.RLock()
 	maxCrit := 0
 	for _, cached := range providerCache {
 		if cached != nil && cached.Err == nil && cached.Criticality > maxCrit {
 			maxCrit = cached.Criticality
 		}
 	}
-	if r == nil || r.Err != nil {
-		systray.SetIcon(neutralIconBytes())
-	} else {
-		systray.SetIcon(usageIconBytes(maxCrit))
-	}
-	systray.SetTooltip(fmt.Sprintf("Usage Monitor — worst: %d%%", maxCrit))
+	cacheMu.RUnlock()
+
+	icon := usageIconBytes(maxCrit)
+	cBytes := C.CBytes(icon)
+	defer C.free(cBytes)
+	C.setStatusIcon(cBytes, C.size_t(len(icon)))
+
+	tooltip := C.CString(fmt.Sprintf("Usage Monitor — worst: %d%%", maxCrit))
+	defer C.free(unsafe.Pointer(tooltip))
+	C.setStatusTooltip(tooltip)
+
+	state := buildPanelStateJSON()
+	cState := C.CString(state)
+	defer C.free(unsafe.Pointer(cState))
+	C.updatePanelState(cState)
 }
 
-// setDataRows writes the given lines to the menu data rows.
-// If singleLine is true, all lines are joined into one menu item;
-// otherwise each line gets its own row.
-func setDataRows(lines []string, singleLine bool) {
-	if singleLine {
-		joined := strings.Join(lines, " · ")
-		if len(joined) > 60 {
-			joined = joined[:60] + "…"
-		}
-		mDataRow[0].SetTitle(joined)
-		for i := 1; i < maxDataRows; i++ {
-			mDataRow[i].SetTitle("")
-		}
-		return
+// loadCfg loads config with a safe default.
+func loadCfg() *Config {
+	cfg, err := loadConfig()
+	if err != nil {
+		return &Config{ActiveProvider: providerOpenCode}
 	}
-	for i := 0; i < maxDataRows; i++ {
-		if i < len(lines) {
-			title := lines[i]
-			if len(title) > 60 {
-				title = title[:60] + "…"
-			}
-			mDataRow[i].SetTitle(title)
-		} else {
-			mDataRow[i].SetTitle("")
-		}
+	if cfg.ActiveProvider == "" {
+		cfg.ActiveProvider = providerOpenCode
 	}
+	return cfg
 }
 
-// ---------- menu click handlers ----------
-
-func handleClicks() {
-	for {
-		select {
-		case <-mRefresh.ClickedCh:
-			go func() {
-				fetchAllProviders()
-				updateMenu()
-			}()
-		case <-mConfigureOpenCode.ClickedCh:
-			promptSetOpenCodeCookie()
-			promptSetOpenCodeWorkspace()
-			go func() {
-				fetchAllProviders()
-				updateMenu()
-			}()
-		case <-mConfigureDS.ClickedCh:
-			promptSetDeepSeekKey()
-			go func() {
-				fetchAllProviders()
-				updateMenu()
-			}()
-		case <-mConfigureMX.ClickedCh:
-			promptSetMiniMaxKey()
-			go func() {
-				fetchAllProviders()
-				updateMenu()
-			}()
-		case <-mQuit.ClickedCh:
-			systray.Quit()
-			return
-		case <-mProviderRadio[providerOpenCode].ClickedCh:
-			switchProvider(providerOpenCode)
-		case <-mProviderRadio[providerDeepSeek].ClickedCh:
-			switchProvider(providerDeepSeek)
-		case <-mProviderRadio[providerMiniMax].ClickedCh:
-			switchProvider(providerMiniMax)
-		}
-	}
-}
-
+// switchProvider changes the active provider and re-pushes state.
 func switchProvider(name string) {
 	cfg := loadCfg()
 	if cfg.ActiveProvider == name {
@@ -267,24 +160,75 @@ func switchProvider(name string) {
 	}
 	cfg.ActiveProvider = name
 	_ = saveConfig(cfg)
+	pushUIState()
+}
 
-	// Update radio checks and data display.
-	for _, p := range providers {
-		if p == name {
-			mProviderRadio[p].Check()
-		} else {
-			mProviderRadio[p].Uncheck()
+// ---------- cgo callbacks (invoked from Obj-C, main queue) ----------
+
+//export goOnReady
+func goOnReady() {
+	// Push a neutral icon immediately so the status item isn't blank while the
+	// first fetch is in flight.
+	pushIconOnly()
+	go backgroundRefresh()
+}
+
+// pushIconOnly updates just the status icon/tooltip from cache without
+// touching the panel state. Used for the initial placeholder.
+func pushIconOnly() {
+	icon := neutralIconBytes()
+	cBytes := C.CBytes(icon)
+	defer C.free(cBytes)
+	C.setStatusIcon(cBytes, C.size_t(len(icon)))
+	tip := C.CString("Usage Monitor — loading")
+	defer C.free(unsafe.Pointer(tip))
+	C.setStatusTooltip(tip)
+}
+
+//export goProviderSelected
+func goProviderSelected(providerID *C.char) {
+	id := C.GoString(providerID)
+	switchProvider(id)
+}
+
+//export goRefreshRequested
+func goRefreshRequested() {
+	go refreshOnce()
+}
+
+//export goSaveCredentials
+func goSaveCredentials(provider, field, value *C.char) {
+	p := C.GoString(provider)
+	f := C.GoString(field)
+	v := C.GoString(value)
+	go func() {
+		cfg := loadCfg()
+		switch {
+		case p == providerOpenCode && f == "workspace_id":
+			cfg.OpenCode.WorkspaceID = v
+		case p == providerOpenCode && f == "auth_cookie":
+			if v != "" && !startsWith(v, "auth=") {
+				v = "auth=" + v
+			}
+			cfg.OpenCode.AuthCookie = v
+		case p == providerDeepSeek && f == "api_key":
+			cfg.DeepSeek.APIKey = v
+		case p == providerMiniMax && f == "api_key":
+			cfg.Minimax.APIKey = v
+		default:
+			return
 		}
-	}
+		_ = saveConfig(cfg)
+		refreshOnce()
+	}()
+}
 
-	// Fill data rows for the newly selected provider.
-	r := providerCache[name]
-	mUpdated.SetTitle("Updated " + time.Now().Format("15:04"))
-	if r == nil {
-		setDataRows([]string{"— not fetched —"}, true)
-	} else if r.Err != nil {
-		setDataRows([]string{r.Err.Error()}, true)
-	} else {
-		setDataRows(r.Lines, false)
-	}
+//export goQuitRequested
+func goQuitRequested() {
+	// Termination is handled on the AppKit side; this is a no-op hook kept
+	// for symmetry / future teardown (e.g. flush config).
+}
+
+func startsWith(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }

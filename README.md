@@ -1,6 +1,8 @@
 # ocg — Usage Monitor (macOS Menu Bar)
 
-Multi-provider usage monitor for the macOS menu bar. Currently supports **OpenCode Go**, **DeepSeek** (balance), and **MiniMax** (token plan quota). Switch between providers via radio buttons in the dropdown menu.
+Multi-provider usage monitor for the macOS menu bar. Currently supports **OpenCode Go**, **DeepSeek** (balance), and **MiniMax** (token plan quota). Click the menu bar icon to open a native popover: a left sidebar shows each provider's brand logo, the right pane shows that provider's usage as progress bars. Switch providers by clicking a sidebar icon; configure credentials inline from the ⚙ Settings view.
+
+The menu bar icon is a monochrome template gauge — a ring that fills proportionally to the worst usage across all providers, tinted automatically to match light/dark mode.
 
 ## Quick Start
 
@@ -10,28 +12,24 @@ cp -R OCGTool.app ~/OCGTool.app   # copy out of source tree
 open ~/OCGTool.app                # launch
 ```
 
-## Menu
+## Popover
 
 ```
-[● colour-coded icon]              ← worst usage across all providers
-  Usage Monitor
-  Updated 14:32
-  ──────────────
-  ◎ OpenCode Go                    ← selected provider
-  ○ DeepSeek
-  ○ MiniMax
-  ──────────────
-  Rolling   2%   🟢   2h 1m         ← current provider's data
-  Weekly   24%   🟢   18h
-  Monthly  63%   🟡   6d 11h
-  ──────────────
-  Refresh Now
-  Configure Providers…
-  ──────────────
-  Quit
+              ┌──┬──────────────────────┐
+              │  │  OpenCode Go      ⚙  │
+              │</>│  Updated 14:32:05    │
+              │  │  Rolling    2%        │
+[◔ gauge] ──▶│  │  ▓░░░░░░░░░░  2h 1m  │
+              │🐳│  Weekly   24%        │
+              │  │  ▓▓▓░░░░░░░░  18h    │
+              │〰 │  Monthly  63%        │
+              │  │  ▓▓▓▓▓▓░░░░  6d 11h  │
+              │  │                       │
+              │  │  Refresh       Quit   │
+              └──┴───────────────────────┘
 ```
 
-Click a radio button to switch providers. The menu bar icon reflects the **worst** usage across all providers.
+Click a sidebar icon to switch providers. Click **⚙** in the header to edit the active provider's credentials inline (auth cookie / API key) and **Save & Refresh**. The popover closes when you click outside it.
 
 ### OpenCode Go
 - **Auth**: cookie-based (browser DevTools → Application → Cookies)
@@ -47,7 +45,7 @@ Click a radio button to switch providers. The menu bar icon reflects the **worst
 
 ## Setup
 
-Use **Configure Providers…** from the menu, then follow the prompts to set credentials for each provider.
+Open the popover, click **⚙** in the header, edit the fields for the active provider, and click **Save & Refresh**.
 
 Config stored at `~/.config/ocg/config.json`. Old single-provider config files are automatically migrated.
 
@@ -59,4 +57,8 @@ make run    # builds and opens the app
 make build  # plain binary
 ```
 
-Requires Go 1.22+ and Xcode Command Line Tools (CGO for systray).
+Requires Go 1.22+ and Xcode Command Line Tools (CGO for the native AppKit shell).
+
+---
+
+**Version 0.0.2** — native NSPopover shell (replaces systray), monochrome template gauge icon, brand-logo sidebar, inline credential editing.
