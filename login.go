@@ -93,14 +93,20 @@ func promptSetDeepSeekKey() bool {
 	return true
 }
 
-// promptConfigureProviders shows instructions and calls per-provider dialogs.
-func promptConfigureProviders() {
-	dialogAlert("Configure Providers",
-		"Choose which provider to configure by clicking its menu item.\n\n"+
-			"OpenCode – set auth cookie + workspace ID\n"+
-			"DeepSeek – set API key\n"+
-			"MiniMax  – set API key")
-	// Individual providers are configured via separate menu items.
-	// This alert guides the user to use Refresh+Configure flow.
+func promptSetMiniMaxKey() bool {
+	cfg, _ := loadConfig()
+	if cfg == nil {
+		cfg = &Config{ActiveProvider: "minimax"}
+	}
+	val, ok := dialogInput("MiniMax", "Paste MiniMax API key:", cfg.Minimax.APIKey)
+	if !ok || val == "" {
+		return false
+	}
+	cfg.Minimax.APIKey = val
+	if err := saveConfig(cfg); err != nil {
+		dialogAlert("Error", fmt.Sprintf("Failed to save config: %v", err))
+		return false
+	}
+	return true
 }
 

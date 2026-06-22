@@ -37,9 +37,11 @@ var (
 	// Data rows — maxDataRows disabled items.
 	mDataRow [maxDataRows]*systray.MenuItem
 
-	mRefresh   *systray.MenuItem
-	mConfigure *systray.MenuItem
-	mQuit      *systray.MenuItem
+	mRefresh            *systray.MenuItem
+	mConfigureOpenCode  *systray.MenuItem
+	mConfigureDS        *systray.MenuItem
+	mConfigureMX        *systray.MenuItem
+	mQuit               *systray.MenuItem
 )
 
 func main() {
@@ -77,10 +79,12 @@ func onReady() {
 	systray.AddSeparator()
 
 	mRefresh = systray.AddMenuItem("Refresh Now", "")
-	mConfigure = systray.AddMenuItem("Configure Providers…", "")
+	systray.AddSeparator()
+	mConfigureOpenCode = systray.AddMenuItem("OpenCode Cookie…", "Set OpenCode auth cookie")
+	mConfigureDS = systray.AddMenuItem("DeepSeek Key…", "Set DeepSeek API key")
+	mConfigureMX = systray.AddMenuItem("MiniMax Key…", "Set MiniMax API key")
 	systray.AddSeparator()
 	mQuit = systray.AddMenuItem("Quit", "")
-
 	go backgroundRefresh()
 	go handleClicks()
 }
@@ -209,8 +213,21 @@ func handleClicks() {
 				fetchAllProviders()
 				updateMenu()
 			}()
-		case <-mConfigure.ClickedCh:
-			promptConfigureProviders()
+		case <-mConfigureOpenCode.ClickedCh:
+			promptSetOpenCodeCookie()
+			promptSetOpenCodeWorkspace()
+			go func() {
+				fetchAllProviders()
+				updateMenu()
+			}()
+		case <-mConfigureDS.ClickedCh:
+			promptSetDeepSeekKey()
+			go func() {
+				fetchAllProviders()
+				updateMenu()
+			}()
+		case <-mConfigureMX.ClickedCh:
+			promptSetMiniMaxKey()
 			go func() {
 				fetchAllProviders()
 				updateMenu()
